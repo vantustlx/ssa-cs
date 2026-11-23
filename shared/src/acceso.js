@@ -58,12 +58,16 @@ function crearServicioAcceso({
   ahora = () => new Date(),
   notificar = async () => {},
   registrarFallido = async () => {},
-  publicar = () => {}
+  publicar = () => {},
+  mensajeNoEncontrado = 'Matrícula no registrada',
+  mensajeVisitanteNoEncontrado = 'Folio de visitante no válido',
+  mensajeNoDisponible = 'No disponible sin conexión; consulta con administración'
 } = {}) {
   const intervaloMinimoSegundos = Number.isFinite(config.intervaloMinimoSegundos)
     ? config.intervaloMinimoSegundos
     : 15;
   const anti = antirrebote || new Antirrebote({ ventanaSegundos: config.antirreboteSegundos || 8 });
+  const resolverMensaje = (valor) => (typeof valor === 'function' ? valor() : valor);
 
   async function rechazar(base, texto, tipoError, mensaje) {
     const donde = base.lector ? `lector ${base.numero} · ${LECTORES[base.lector].nombre}` : base.origen;
@@ -83,7 +87,7 @@ function crearServicioAcceso({
     const salida = await repo.conTransaccion(async (tx) => {
       const usuario = await repo.obtenerUsuarioParaAcceso(matricula, tx);
       if (!usuario) {
-        return { rechazo: { texto: matricula, tipoError: 'MATRICULA_NO_ENCONTRADA', mensaje: 'Matrícula no registrada' } };
+        return { rechazo: { texto: matricula, tipoError: 'MATRICULA_NO_ENCONTRADA', mensaje: resolverMensaje(mensajeNoEncontrado) } };
       }
 
       const placas = await repo.obtenerPlacas(matricula, tx);
@@ -97,19 +101,20 @@ function crearServicioAcceso({
       let abierto = await repo.entradaAbiertaUsuario(matricula, tx);
       const decision = decidirMovimiento({ entradaAbierta: abierto, ahora: fecha, inicioDelDia: inicio });
       if (decision.cerrarAnterior) {
-        await repo.marcarCierreAutomatico({ id: abierto.id_registro, fecha }, tx);
         avisos.push(decision.aviso);
+        await repo.marcarCierreAutomatico({ id: abierto.id_registro, fecha, contexto: { ...base, ...datos, avisos } }, tx);
         abierto = null;
       }
 
       const tipo = decision.tipo;
       avisos.push(...avisosDeAcceso({ tipo, medio: info.medio, placas }));
+      const contexto = { ...base, ...datos, avisos };
 
       if (tipo === 'ENTRADA') {
-        await repo.crearEntradaUsuario({ matricula, medio: info.medio, fecha }, tx);
+        await repo.crearEntradaUsuario({ matricula, medio: info.medio, fecha, contexto }, tx);
         await repo.actualizarEstatusUsuario(matricula, 'Activo', tx);
       } else {
-        await repo.cerrarEntradaUsuario({ id: abierto.id_registro, medio: info.medio, fecha }, tx);
+        await repo.cerrarEntradaUsuario({ id: abierto.id_registro, medio: info.medio, fecha, contexto }, tx);
         await repo.actualizarEstatusUsuario(matricula, 'Inactivo', tx);
       }
 
@@ -147,7 +152,7 @@ function crearServicioAcceso({
     const salida = await repo.conTransaccion(async (tx) => {
       const visitante = await repo.obtenerVisitantePorFolio(folio, tx);
       if (!visitante) {
-        return { rechazo: { texto: folio, tipoError: 'VISITANTE_NO_VALIDO', mensaje: 'Folio de visitante no válido' } };
+        return { rechazo: { texto: folio, tipoError: 'VISITANTE_NO_VALIDO', mensaje: resolverMensaje(mensajeVisitanteNoEncontrado) } };
       }
       if (!visitante.vigente_hasta || new Date(visitante.vigente_hasta) < fecha) {
         return { rechazo: { texto: folio, tipoError: 'VISITANTE_VENCIDO', mensaje: 'Pase de visitante vencido' } };
@@ -165,16 +170,17 @@ function crearServicioAcceso({
       const repetida = mensajeLecturaRepetida(ultimo, intervaloMinimoSegundos);
       if (repetida) return { resultado: { ...base, ...datos, estado: 'REPETIDO', mensaje: repetida } };
 
+      const contexto = { ...base, ...datos };
       let abierto = await repo.entradaAbiertaVisitante(visitante.id_visitante, tx);
       if (abierto && new Date(abierto.fecha_entrada) < inicio) {
-        await repo.marcarCierreAutomatico({ id: abierto.id_registro, fecha }, tx);
+        await repo.marcarCierreAutomatico({ id: abierto.id_registro, fecha, contexto }, tx);
         abierto = null;
       }
 
       if (abierto) {
-        await repo.cerrarEntradaVisitante({ id: abierto.id_registro, fecha }, tx);
+        await repo.cerrarEntradaVisitante({ id: abierto.id_registro, fecha, contexto }, tx);
       } else {
-        await repo.crearEntradaVisitante({ idVisitante: visitante.id_visitante, fecha }, tx);
+        await repo.crearEntradaVisitante({ idVisitante: visitante.id_visitante, fecha, contexto }, tx);
       }
 
       const estado = abierto ? 'SALIDA' : 'ENTRADA';
@@ -219,6 +225,8 @@ function crearServicioAcceso({
 
     if (!visitante && !credencial) {
       resultado = await rechazar(base, texto, 'QR_INVALIDO', 'Código no válido');
+    } else if (credencial && credencial.error === 'SIN_DATOS') {
+      resultado = await rechazar(base, texto, 'SIN_DATOS', resolverMensaje(mensajeNoDisponible));
     } else if (credencial && credencial.error === 'SIN_FIRMA') {
       resultado = await rechazar(base, texto, 'QR_SIN_FIRMA', 'Credencial anterior: pide al administrador que te la reenvíe');
     } else if (credencial && credencial.error) {

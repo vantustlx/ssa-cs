@@ -96,12 +96,21 @@ CREATE TABLE IF NOT EXISTS `registroacceso` (
   `medio_entrada` enum('PEATONAL','VEHICULAR') DEFAULT NULL COMMENT 'Lector por el que entró',
   `medio_salida` enum('PEATONAL','VEHICULAR') DEFAULT NULL COMMENT 'Lector por el que salió',
   `cierre_automatico` datetime DEFAULT NULL COMMENT 'Momento en que el sistema cerró una entrada sin salida',
+  `uuid` char(36) DEFAULT NULL COMMENT 'Identificador idempotente del evento offline',
+  `recibido_en` datetime DEFAULT CURRENT_TIMESTAMP COMMENT 'Momento en que se recibió el evento sincronizado',
   PRIMARY KEY (`id_registro`),
+  UNIQUE KEY `uq_registro_uuid` (`uuid`),
   KEY `matricula` (`matricula`),
   KEY `id_visitante` (`id_visitante`),
   CONSTRAINT `registroacceso_ibfk_1` FOREIGN KEY (`matricula`) REFERENCES `usuario` (`matricula`),
   CONSTRAINT `registroacceso_ibfk_2` FOREIGN KEY (`id_visitante`) REFERENCES `visitante` (`id_visitante`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS `sync_evento` (
+  `uuid` char(36) NOT NULL COMMENT 'UUID del evento de la outbox local',
+  `tipo` varchar(30) NOT NULL,
+  `recibido_en` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`uuid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Eventos offline ya aplicados (idempotencia)';
 CREATE TABLE IF NOT EXISTS `accesos_fallidos` (
   `id` int NOT NULL AUTO_INCREMENT,
   `matricula_intentada` varchar(50) DEFAULT NULL COMMENT 'Matrícula o código QR que intentó acceder',

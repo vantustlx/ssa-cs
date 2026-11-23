@@ -1,287 +1,49 @@
-// acceso.js — registro de entradas y salidas desde los lectores (serial, cámara o lector tipo teclado)
+// acceso.js — adaptador IPC del lector
 //
-// Los tres lectores (1 · Peatonal, 2 · Entrada vehicular, 3 · Salida vehicular) registran entradas y
-// salidas: el movimiento lo decide el último estado de la persona, no el lector. Si tiene una entrada
-// abierta de hoy, la lectura es su salida; si no, es una entrada. El lector solo define el medio
-// (peatonal o vehicular) y, en los vehiculares, se muestran las placas del usuario.
-// Las incoherencias no bloquean el paso: se muestran al vigilante y se notifican al administrador.
-// Visitantes ("V-" + folio): mismas reglas, sin medio ni datos de vehículo.
-const { ipcMain, BrowserWindow } = require('electron');
+// La decisión de entrada/salida vive en @ssa/shared y se ejecuta contra SQLite local
+// (offline/index.js). Las lecturas se encolan para soportar ráfagas sin esperar a la red.
+const { ipcMain } = require('electron');
 const config = require('./config');
-const {
-  LECTORES,
-  MATRICULA_VALIDA,
-  CODIGO_VISITANTE,
-  FOLIO_VISITANTE,
-  Antirrebote,
-  nombreCompleto,
-  inicioDeHoy,
-  mensajeLecturaRepetida,
-  decidirMovimiento,
-  avisosDeAcceso
-} = require('@ssa/shared');
-const { crearNotificacion, registrarAccesoFallido } = require('./notificaciones');
-const { obtenerAreasDeUsuarios, areaPrincipal } = require('./areas');
-const { leerQR } = require('./qrFirmado');
+const { LECTORES, MATRICULA_VALIDA } = require('@ssa/shared');
+const { crearOffline } = require('./offline');
 
-let pool;
-const antirrebote = new Antirrebote({ ventanaSegundos: config.lectores.antirreboteSegundos });
+let offline = null;
+let poolRef = null;
 
-// Doble lectura: la persona ya registró un movimiento hace menos de LECTOR_INTERVALO_MIN_SEG segundos
-// (en cualquier lector). No se registra nada; se avisa al vigilante para que no lo tome como falla.
-async function lecturaRepetida(conexion, columna, id) {
-  const [[ultimo]] = await conexion.query(
-    `SELECT fecha_salida IS NOT NULL AS fue_salida,
-            TIMESTAMPDIFF(SECOND, COALESCE(fecha_salida, fecha_entrada), NOW()) AS segundos
-       FROM registroacceso
-      WHERE ${columna} = ?
-      ORDER BY fecha_entrada DESC, id_registro DESC LIMIT 1`,
-    [id]
-  );
-  return mensajeLecturaRepetida(ultimo, config.lectores.intervaloMinimoSegundos);
+async function setupAcceso(pool) {
+  poolRef = pool;
+  offline = crearOffline({ pool, config });
+
+  // Lecturas de la cámara o de un lector tipo teclado en la ventana del lector
+  ipcMain.handle('registrar-acceso', (event, { texto, lector, origen }) =>
+    registrarAcceso(texto, lector, origen || 'camara'));
+  ipcMain.handle('buscar-usuario-por-matricula', (event, matricula) => buscarUsuario(matricula));
+  ipcMain.handle('registrar-acceso-visitante', (event, folio) => registrarFolioVisitante(folio));
+  ipcMain.handle('estado-sincronizacion', () => offline.estado.instantanea());
+  ipcMain.handle('sincronizar-ahora', () => offline.sync.sincronizarAhora());
+
+  return offline;
 }
 
-function publicar(resultado) {
-  BrowserWindow.getAllWindows().forEach((ventana) => ventana.webContents.send('lectura-acceso', resultado));
+function registrarAcceso(texto, lector, origen) {
+  if (!offline) throw new Error('La capa offline aún no está inicializada');
+  return offline.registrarAcceso(texto, lector, origen);
 }
 
-function esRepetida(lector, matricula) {
-  return antirrebote.repetida(`${lector}:${matricula}`);
+function registrarFolioVisitante(textoFolio) {
+  if (!offline) throw new Error('La capa offline aún no está inicializada');
+  return offline.registrarFolioVisitante(textoFolio);
 }
 
-async function rechazar(base, texto, tipoError, mensaje) {
-  const donde = base.lector ? `lector ${base.numero} · ${LECTORES[base.lector].nombre}` : base.origen;
-  await registrarAccesoFallido(texto, tipoError, `${mensaje} (${donde})`)
-    .catch((e) => console.error('[ACCESO] No se pudo registrar el acceso fallido:', e));
-  return { ...base, estado: 'RECHAZADO', mensaje };
-}
-
-/**
- * Registra la lectura de un QR en el lector indicado y publica el resultado a las ventanas.
- * origen: 'serial' | 'camara' | 'teclado'
- */
-async function registrarAcceso(textoLeido, lector, origen) {
-  const info = LECTORES[lector];
-  if (!info) throw new Error(`Lector desconocido: ${lector}`);
-
-  const texto = String(textoLeido || '').trim();
-  const base = { lector, numero: info.numero, origen, hora: new Date().toISOString(), avisos: [], placas: [] };
-  let resultado;
-
-  if (!texto) return { ...base, estado: 'REPETIDO' };
-  if (esRepetida(lector, texto)) {
-    // El escáner o la cámara releen mientras la persona sostiene el QR: no se publica nada
-    return { ...base, estado: 'REPETIDO' };
-  }
-
-  const visitante = CODIGO_VISITANTE.exec(texto.toUpperCase());
-  const credencial = visitante ? null : leerQR(texto);
-  if (!visitante && !credencial) {
-    resultado = await rechazar(base, texto, 'QR_INVALIDO', 'Código no válido');
-  } else if (credencial && credencial.error === 'SIN_FIRMA') {
-    resultado = await rechazar(base, texto, 'QR_SIN_FIRMA', 'Credencial anterior: pide al administrador que te la reenvíe');
-  } else if (credencial && credencial.error) {
-    resultado = await rechazar(base, texto, 'QR_FALSIFICADO', 'Código no válido');
-  } else {
-    try {
-      resultado = visitante
-        ? await registrarVisitanteEnBD(base, visitante[1])
-        : await registrarEnBD(base, credencial.matricula, info);
-    } catch (error) {
-      console.error('[ACCESO] Error al registrar el acceso:', error);
-      resultado = { ...base, estado: 'RECHAZADO', mensaje: 'Error del sistema, intenta de nuevo' };
-    }
-  }
-
-  publicar(resultado);
-  return resultado;
-}
-
-async function registrarEnBD(base, matricula, info) {
-  const conexion = await pool.getConnection();
-  const avisos = [];
-  let resultado;
-  try {
-    await conexion.beginTransaction();
-
-    // Bloquea al usuario: dos lectores con la misma persona se procesan uno tras otro
-    const [[usuario]] = await conexion.query(
-      'SELECT matricula, nombre, apellido_paterno, apellido_materno FROM usuario WHERE matricula = ? FOR UPDATE',
-      [matricula]
-    );
-    if (!usuario) {
-      await conexion.rollback();
-      return await rechazar(base, matricula, 'MATRICULA_NO_ENCONTRADA', 'Matrícula no registrada');
-    }
-
-    const [vehiculos] = await conexion.query('SELECT placa FROM vehiculo WHERE matricula = ? ORDER BY placa', [matricula]);
-    const placas = vehiculos.map((v) => v.placa);
-    const datos = {
-      matricula,
-      nombre: nombreCompleto(usuario),
-      rol: areaPrincipal((await obtenerAreasDeUsuarios([matricula], conexion)).get(matricula)),
-      placas
-    };
-
-    const repetida = await lecturaRepetida(conexion, 'matricula', matricula);
-    if (repetida) {
-      await conexion.rollback();
-      return { ...base, ...datos, estado: 'REPETIDO', mensaje: repetida };
-    }
-
-    let [[abierto]] = await conexion.query(
-      `SELECT id_registro, fecha_entrada, medio_entrada FROM registroacceso
-        WHERE matricula = ? AND fecha_salida IS NULL AND cierre_automatico IS NULL
-        ORDER BY fecha_entrada DESC LIMIT 1 FOR UPDATE`,
-      [matricula]
-    );
-
-    // Entrada de un día anterior que el cierre diario no alcanzó a cerrar
-    const decision = decidirMovimiento({ entradaAbierta: abierto, ahora: new Date(), inicioDelDia: inicioDeHoy() });
-    if (decision.cerrarAnterior) {
-      await conexion.query('UPDATE registroacceso SET cierre_automatico = NOW() WHERE id_registro = ?', [abierto.id_registro]);
-      avisos.push(decision.aviso);
-      abierto = null;
-    }
-
-    // El mismo criterio en los tres lectores: con entrada abierta sale, sin ella entra
-    const tipo = decision.tipo;
-    avisos.push(...avisosDeAcceso({ tipo, medio: info.medio, placas }));
-
-    if (tipo === 'ENTRADA') {
-      await conexion.query(
-        'INSERT INTO registroacceso (matricula, fecha_entrada, medio_entrada) VALUES (?, NOW(), ?)',
-        [matricula, info.medio]
-      );
-      await conexion.query("UPDATE usuario SET estatus = 'Activo' WHERE matricula = ?", [matricula]);
-    } else {
-      await conexion.query(
-        'UPDATE registroacceso SET fecha_salida = NOW(), medio_salida = ? WHERE id_registro = ?',
-        [info.medio, abierto.id_registro]
-      );
-      await conexion.query("UPDATE usuario SET estatus = 'Inactivo' WHERE matricula = ?", [matricula]);
-    }
-
-    await conexion.commit();
-    resultado = {
-      ...base,
-      ...datos,
-      estado: tipo,
-      avisos,
-      mensaje: tipo === 'ENTRADA' ? 'Entrada registrada' : 'Salida registrada'
-    };
-  } catch (error) {
-    await conexion.rollback().catch(() => {});
-    throw error;
-  } finally {
-    conexion.release();
-  }
-
-  for (const aviso of avisos) {
-    await crearNotificacion({
-      tipo: 'ACCESO_INCONSISTENTE',
-      matricula,
-      titulo: `Acceso inconsistente · lector ${info.numero} (${info.nombre})`,
-      mensaje: `${resultado.nombre} (${matricula}): ${aviso}.`
-    }).catch((e) => console.error('[ACCESO] No se pudo notificar la inconsistencia:', e));
-  }
-  return resultado;
-}
-
-// Visitantes: entran y salen por cualquiera de los tres lectores (o tecleando el folio);
-// se alterna entrada/salida sin registrar el medio ni el estatus
-async function registrarVisitanteEnBD(base, folio) {
-  const conexion = await pool.getConnection();
-  try {
-    await conexion.beginTransaction();
-    const [[visitante]] = await conexion.query(
-      `SELECT id_visitante, nombre, apellido_paterno, apellido_materno, tipo, motivo, vigente_hasta
-         FROM visitante WHERE codigo_acceso = ? FOR UPDATE`,
-      [folio]
-    );
-    if (!visitante) {
-      await conexion.rollback();
-      return await rechazar(base, folio, 'VISITANTE_NO_VALIDO', 'Folio de visitante no válido');
-    }
-    if (!visitante.vigente_hasta || new Date(visitante.vigente_hasta) < new Date()) {
-      await conexion.rollback();
-      return await rechazar(base, folio, 'VISITANTE_VENCIDO', 'Pase de visitante vencido');
-    }
-    const datos = {
-      visitante: true, folio, nombre: nombreCompleto(visitante), rol: `Visitante ${visitante.tipo.toLowerCase()}`, motivo: visitante.motivo
-    };
-
-    const repetida = await lecturaRepetida(conexion, 'id_visitante', visitante.id_visitante);
-    if (repetida) {
-      await conexion.rollback();
-      return { ...base, ...datos, estado: 'REPETIDO', mensaje: repetida };
-    }
-
-    let [[abierto]] = await conexion.query(
-      `SELECT id_registro, fecha_entrada FROM registroacceso
-        WHERE id_visitante = ? AND fecha_salida IS NULL AND cierre_automatico IS NULL
-        ORDER BY fecha_entrada DESC LIMIT 1 FOR UPDATE`,
-      [visitante.id_visitante]
-    );
-    // Una entrada de otro día sin salida no convierte la visita de hoy en salida
-    const decision = decidirMovimiento({ entradaAbierta: abierto, ahora: new Date(), inicioDelDia: inicioDeHoy() });
-    if (decision.cerrarAnterior) {
-      await conexion.query('UPDATE registroacceso SET cierre_automatico = NOW() WHERE id_registro = ?', [abierto.id_registro]);
-      abierto = null;
-    }
-
-    if (abierto) {
-      await conexion.query('UPDATE registroacceso SET fecha_salida = NOW() WHERE id_registro = ?', [abierto.id_registro]);
-    } else {
-      await conexion.query('INSERT INTO registroacceso (id_visitante, fecha_entrada) VALUES (?, NOW())', [visitante.id_visitante]);
-    }
-    await conexion.commit();
-
-    const estado = decision.tipo;
-    return {
-      ...base,
-      ...datos,
-      estado,
-      mensaje: estado === 'ENTRADA' ? 'Entrada registrada' : 'Salida registrada'
-    };
-  } catch (error) {
-    await conexion.rollback().catch(() => {});
-    throw error;
-  } finally {
-    conexion.release();
-  }
-}
-
-// Folio tecleado en "Acceder" (para quien no trae el pase en el celular)
-async function registrarFolioVisitante(textoFolio) {
-  const folio = String(textoFolio || '').trim().toUpperCase().replace(/^V-/, '');
-  const base = { lector: null, origen: 'folio', hora: new Date().toISOString(), avisos: [], placas: [] };
-  if (!FOLIO_VISITANTE.test(folio)) return rechazar(base, folio, 'VISITANTE_NO_VALIDO', 'Folio de visitante no válido');
-  try {
-    return await registrarVisitanteEnBD(base, folio);
-  } catch (error) {
-    console.error('[ACCESO] Error al registrar el folio del visitante:', error);
-    return { ...base, estado: 'RECHAZADO', mensaje: 'Error del sistema, intenta de nuevo' };
-  }
-}
-
-// Para asociar placas: solo consulta, no registra ningún acceso
+// Para asociar placas: solo consulta a MySQL (pantalla de administrador, siempre online).
 async function buscarUsuario(matricula) {
   const texto = String(matricula || '').trim();
   if (!MATRICULA_VALIDA.test(texto)) return null;
-  const [[usuario]] = await pool.query(
+  const [[usuario]] = await poolRef.query(
     'SELECT matricula, nombre, apellido_paterno, apellido_materno FROM usuario WHERE matricula = ?',
     [Number(texto)]
   );
   return usuario || null;
-}
-
-function setupAcceso(poolDB) {
-  pool = poolDB;
-  // Lecturas de la cámara o de un lector tipo teclado en la ventana del lector
-  ipcMain.handle('registrar-acceso', (event, { texto, lector, origen }) => registrarAcceso(texto, lector, origen || 'camara'));
-  ipcMain.handle('buscar-usuario-por-matricula', (event, matricula) => buscarUsuario(matricula));
-  ipcMain.handle('registrar-acceso-visitante', (event, folio) => registrarFolioVisitante(folio));
 }
 
 module.exports = { LECTORES, setupAcceso, registrarAcceso };

@@ -1,9 +1,9 @@
 # Plan de migración a cliente-servidor (offline-first)
 
-> Estado: **Fase 0–1 completada · Fase 2 planificada, pendiente de inicio** · Fecha: 2026-11-23
+> Estado: **Fases 0–2 completadas · Fase 3 pendiente de indicación** · Fecha: 2026-11-23
 > Objetivo: migrar la app Electron + MySQL directo a **cliente-servidor de 3 capas**, conservando escritorio, los 3 escáneres por COM y operación offline en la caseta.
 > Stack definitivo: **Express + MySQL en backend**, **Electron + SQLite en frontend**, **monorepo pnpm** con `frontend/`, `backend/` y `shared/` en la raíz.
-> Implementado hasta ahora: monorepo pnpm, `shared/` (dominio puro), repositorio MySQL del acceso en `backend/`, esqueleto Express con `GET /salud`, adaptadores del frontend y pruebas (`pnpm test`). **Fase 2 planificada, pendiente de inicio.**
+> Implementado hasta ahora: monorepo pnpm, `shared/` (dominio puro), repositorio MySQL del acceso en `backend/`, esqueleto Express con `GET /salud`, adaptadores del frontend, **lector offline-first con SQLite**, outbox/sync temporal por MySQL, cierre local y UI de conexión. **Fase 3 pendiente de indicación.**
 
 ## Decisiones cerradas
 
@@ -885,14 +885,33 @@ No genera PDFs ni notificaciones locales. El `cierreDiario.js` de MySQL se manti
 
 ---
 
+## 9.2 Estado de implementación Fase 2
+
+- **SQLite local** con `node:sqlite` (`DatabaseSync`); esquema versionado, WAL y transacciones serializadas.
+- **Repo SQLite** con el mismo contrato que el repo MySQL; cada movimiento escribe `registro_local` + `outbox` en la misma transacción.
+- **Snapshot** desde MySQL (usuarios, vehículos, áreas, visitantes vigentes, firmas QR y configuración) al iniciar, al reconectar y cada 5 minutos.
+- **Outbox/sync** con lotes, orden por `rowid`, reintentos, conflictos y deduplicación por `uuid` + `sync_evento` en MySQL.
+- **Cierre local** de entradas de días anteriores y a la hora configurada; el cierre MySQL queda gateado por conexión.
+- **UI del lector** con estado `En línea/Sin conexión`, antigüedad del snapshot y pendientes.
+- **Migración** `db/migraciones/2026-11-23_sync_uuid.sql` y esquema actualizado.
+- **Pruebas:** 34 de `shared`, 5 de `backend` y 30 de `frontend` (la integración MySQL se salta salvo `TEST_DB=1`; con ella son 36 y pasan).
+- **Verificado en Electron 44.7.0:** Node 24.21.0 expone `node:sqlite`; snapshot y transporte se probaron contra MySQL 8 en Docker. La app arrancó bajo Xvfb y aplicó un snapshot real (usuarios/vehículos) sin errores.
+
+---
+
 ## 10. Siguiente paso
 
-**Fase 0–1 completada.** Queda hecho:
+**Fases 0–2 completadas.** Queda hecho:
 
 1. Repo reestructurado a `frontend/`, `backend/`, `shared/` con pnpm.
 2. Esqueleto Express con `GET /salud`.
 3. Dominio extraído a `shared/` y repo MySQL del acceso en `backend/`.
 4. Frontend adaptado sin cambiar comportamiento.
 5. `pnpm test` en verde (dominio, servicio de acceso, `/salud` y contrato del repo).
+6. Lector offline-first con SQLite, decisión local, cola de ráfagas y antirrebote.
+7. Snapshot desde MySQL cada 5 minutos, outbox y replay idempotente con `uuid` + `sync_evento`.
+8. Cierre local y cierre MySQL gateado por conexión.
+9. UI de estado de sincronización en la ventana del lector.
+10. Migración `2026-11-23_sync_uuid.sql` y pruebas de integración con MySQL.
 
-**Fase 2 planificada, pendiente de indicación del responsable.** El detalle está en la sección 6.1; cuando se autorice, el trabajo empieza por verificar `node:sqlite` en Electron y sigue con SQLite local, snapshot, outbox, sync temporal por MySQL y cierre local.
+**Fase 3 pendiente de indicación del responsable.** El detalle de la fase offline está en la sección 6.1; la siguiente fase es el backend Express completo (`auth`, `sync` HTTP, jobs, PDFs, SSE) y el despliegue temprano a staging.

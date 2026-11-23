@@ -76,7 +76,10 @@ mysql -u root -p < db/migraciones/2026-10-05_lectores_y_cierre_diario.sql
 mysql -u root -p < db/migraciones/2026-10-05_visitantes_codigo_barras.sql
 mysql -u root -p < db/migraciones/2026-10-05_areas_usuario.sql
 mysql -u root -p < db/migraciones/2026-10-12_quitar_areas.sql
+mysql -u root -p < db/migraciones/2026-11-23_sync_uuid.sql
 ```
+
+La migración `2026-11-23_sync_uuid.sql` agrega `registroacceso.uuid` y la tabla `sync_evento`, necesarias para la sincronización offline del lector (Fase 2).
 
 ## Lector de accesos
 
@@ -95,6 +98,24 @@ Los tres lectores (1 · Peatonal, 2 · Entrada vehicular, 3 · Salida vehicular)
 Las incoherencias no bloquean el paso: se muestran al vigilante con ⚠ y llegan a **Notificaciones** (usar un lector vehicular sin vehículo registrado, entrada de un día anterior sin salida). Un código desconocido, un QR con firma inválida o una matrícula inexistente se rechazan y se registran en `accesos_fallidos`.
 
 El QR de la credencial lleva la matrícula y una firma (`FCB<matrícula>K<firma>`, calculada con `QR_SECRETO`), para que nadie pueda generar el QR de otra persona escribiendo su matrícula. Las credenciales anteriores, que solo traen la matrícula, se rechazan salvo con `QR_ACEPTAR_SIN_FIRMA=si`; se reenvían desde **Modo administrador → Recuperar QR**. La cámara de la ventana del lector queda como respaldo y registra con el lector que se elija.
+
+### Modo offline del lector (Fase 2)
+
+El lector decide y registra en una **base SQLite local** (`accesos.db` en la carpeta de datos de la app), así que sigue operando sin internet durante la jornada. Los movimientos quedan en una **outbox** y se reenvían a MySQL cuando hay conexión, con deduplicación por `uuid` (`sync_evento`).
+
+- Al iniciar, al reconectar y **cada 5 minutos** se descarga un snapshot de usuarios, vehículos, áreas, visitantes vigentes y firmas QR.
+- Un usuario o visitante dado de alta **después** del último snapshot no estará disponible hasta sincronizar; el lector lo indica en pantalla.
+- La ventana del lector muestra `En línea`/`Sin conexión`, la antigüedad del snapshot y el número de pendientes.
+- El cierre local cierra entradas de días anteriores y a la hora configurada; el cierre MySQL se mantiene para cuando hay conexión.
+- SQLite usa `node:sqlite`, incluido en el Node de Electron 44; no requiere módulo nativo.
+- Si actualizas una BD existente, aplica `db/migraciones/2026-11-23_sync_uuid.sql`.
+
+La integración real con MySQL se puede probar con:
+
+```bash
+pnpm db:up
+TEST_DB=1 pnpm --filter @ssa/frontend test
+```
 
 ## Visitantes
 

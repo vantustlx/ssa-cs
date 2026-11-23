@@ -39,6 +39,9 @@ body {
 .titulo { text-align: center; }
 .titulo h1 { margin: 0; color: var(--guinda); font-size: 24px; }
 .titulo p { margin: 2px 0 0; color: var(--gris); font-size: 14px; }
+.titulo .estado-sync { font-size: 12px; font-weight: bold; }
+.titulo .estado-sync.en-linea { color: #2e7d32; }
+.titulo .estado-sync.sin-conexion { color: #c62828; }
 
 .aviso-sin-asignar {
     margin: 10px 24px 0;

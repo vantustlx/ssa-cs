@@ -12,7 +12,7 @@
     "dev": "pnpm --filter @ssa/frontend dev",
     "dev:back": "pnpm --filter @ssa/backend dev",
     "start:back": "pnpm --filter @ssa/backend start",
-    "test": "pnpm --filter @ssa/shared test && pnpm --filter @ssa/backend test",
+    "test": "pnpm --filter @ssa/shared test && pnpm --filter @ssa/backend test && pnpm --filter @ssa/frontend test",
     "db:up": "docker compose up -d mysql",
     "db:down": "docker compose down"
   }

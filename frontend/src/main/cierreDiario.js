@@ -148,11 +148,15 @@ async function revisar() {
   await respaldoDiario({ despuesDelCierre: new Date() >= horaDeCierreHoy(new Date()) });
 }
 
-// Devuelve la primera revisión para esperarla antes de abrir los lectores
-function setupCierreDiario(poolDB) {
+// Devuelve la primera revisión (si hay conexión para el cierre MySQL); el cierre local
+// del lector corre siempre en offline/cierreLocal.js.
+function setupCierreDiario(poolDB, { estaOnline = () => true } = {}) {
   pool = poolDB;
-  setInterval(revisar, INTERVALO_REVISION_MS);
-  return revisar();
+  setInterval(() => {
+    if (estaOnline()) revisar();
+  }, INTERVALO_REVISION_MS);
+  if (estaOnline()) return revisar();
+  return Promise.resolve();
 }
 
 module.exports = { setupCierreDiario, ejecutarCierre };

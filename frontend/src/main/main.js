@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog } = require('electron');
 const path = require('path');
 const { setupDBListeners, pool } = require('./database');
 const { setupEmailListeners } = require('./sendemails');
@@ -22,6 +22,7 @@ const config = require('./config');
 let win;
 let lectorWin;      // Ventana del lector de accesos, siempre abierta
 let saliendo = false;
+let offlineCtx = null;
 
 const VISTA_LECTOR = path.join(__dirname, '..', 'renderer', 'views', 'qrlector.html');
 
@@ -150,7 +151,17 @@ app.whenReady().then(async () => {
   }
   setupAuth();
   setupSesionAdmin();
-  setupAcceso(pool);
+  try {
+    offlineCtx = await setupAcceso(pool);
+  } catch (error) {
+    console.error('[APP] No se pudo inicializar la capa offline:', error);
+    dialog.showErrorBox(
+      'Sistema de Acceso',
+      `No se pudo inicializar la base local del lector:\n${error.message}`
+    );
+    app.quit();
+    return;
+  }
   setupVisitantes(pool);
   setupAreas(pool);
   setupGestionMasiva(pool);
@@ -162,9 +173,11 @@ app.whenReady().then(async () => {
   setupNotificaciones(pool);
   // Recoge las confirmaciones de registro recibidas mientras la app estaba cerrada
   setupRegistro(pool);
-  // Primero se cierran las entradas de días anteriores; después se abren los escáneres
-  await setupCierreDiario(pool);
+  // La capa offline cierra días anteriores y carga el primer snapshot antes de abrir los escáneres
+  await offlineCtx.iniciar();
   setupLectores();
+  // El cierre MySQL se conserva para el modo online; no bloquea la apertura del lector
+  setupCierreDiario(pool, { estaOnline: () => offlineCtx.estado.estado.online });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -172,7 +185,10 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', () => { saliendo = true; });
+app.on('before-quit', () => {
+  saliendo = true;
+  if (offlineCtx) offlineCtx.cerrar();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

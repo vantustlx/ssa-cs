@@ -139,6 +139,28 @@ document.addEventListener('DOMContentLoaded', () => {
         sonar(resultado.estado, resultado.avisos && resultado.avisos.length);
     });
 
+    // ---------------------------------------------------------------
+    // Estado de sincronización (online/offline, snapshot y pendientes)
+    // ---------------------------------------------------------------
+    const estadoSync = document.getElementById('estado-sync');
+
+    function pintarEstadoSync(e) {
+        if (!e) {
+            estadoSync.textContent = '';
+            return;
+        }
+        const pendientes = e.pendientes ?? 0;
+        const datos = e.snapshotTs
+            ? new Date(e.snapshotTs).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })
+            : 'sin datos locales';
+        estadoSync.className = `estado-sync ${e.online ? 'en-linea' : 'sin-conexion'}`;
+        estadoSync.textContent = `${e.online ? 'En línea' : 'Sin conexión'} · datos al ${datos} · ${pendientes} pendiente(s)`;
+        if (e.error) estadoSync.textContent += ` · ${e.error}`;
+    }
+
+    ipcRenderer.invoke('estado-sincronizacion').then(pintarEstadoSync).catch(() => {});
+    ipcRenderer.on('estado-sincronizacion', (event, e) => pintarEstadoSync(e));
+
     Object.keys(ROLES).forEach(mostrarEspera);
 
     // ---------------------------------------------------------------

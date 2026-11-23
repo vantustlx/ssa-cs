@@ -1,7 +1,7 @@
 // qrFirmado.js — adaptador del QR: aporta el secreto de config al dominio compartido
 const crypto = require('crypto');
 const config = require('./config');
-const { contenidoQR: contenidoConSecreto, leerQR: leerQRCompartido } = require('@ssa/shared');
+const { firmaConSecreto, contenidoQR: contenidoConSecreto, leerQR: leerQRCompartido } = require('@ssa/shared');
 
 // Si el .env no tiene secreto se crea uno: cambiarlo o perderlo invalida todas las credenciales emitidas
 function secreto() {
@@ -12,6 +12,10 @@ function secreto() {
   return process.env.QR_SECRETO;
 }
 
+function firma(matricula) {
+  return firmaConSecreto(Number(matricula), secreto());
+}
+
 function contenidoQR(matricula) {
   return contenidoConSecreto(matricula, secreto());
 }
@@ -20,4 +24,4 @@ function leerQR(texto) {
   return leerQRCompartido(texto, { secreto: secreto(), aceptarSinFirma: config.qr.aceptarSinFirma });
 }
 
-module.exports = { contenidoQR, leerQR };
+module.exports = { contenidoQR, leerQR, firma, secreto };

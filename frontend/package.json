@@ -4,7 +4,8 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron src/main/main.js",
-    "dev": "electron src/main/main.js --dev"
+    "dev": "electron src/main/main.js --dev",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
