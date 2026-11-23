@@ -1,0 +1,10 @@
+packages:
+  - frontend
+  - backend
+  - shared
+
+# Módulos nativos que necesitan ejecutar sus scripts de instalación/compilación.
+allowBuilds:
+  "@serialport/bindings-cpp": true
+  better-sqlite3: true
+  electron: true

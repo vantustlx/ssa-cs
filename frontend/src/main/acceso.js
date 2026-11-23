@@ -8,34 +8,24 @@
 // Visitantes ("V-" + folio): mismas reglas, sin medio ni datos de vehículo.
 const { ipcMain, BrowserWindow } = require('electron');
 const config = require('./config');
+const {
+  LECTORES,
+  MATRICULA_VALIDA,
+  CODIGO_VISITANTE,
+  FOLIO_VISITANTE,
+  Antirrebote,
+  nombreCompleto,
+  inicioDeHoy,
+  mensajeLecturaRepetida,
+  decidirMovimiento,
+  avisosDeAcceso
+} = require('@ssa/shared');
 const { crearNotificacion, registrarAccesoFallido } = require('./notificaciones');
 const { obtenerAreasDeUsuarios, areaPrincipal } = require('./areas');
 const { leerQR } = require('./qrFirmado');
 
-const LECTORES = {
-  PEATONAL: { numero: 1, nombre: 'Peatonal', medio: 'PEATONAL' },
-  ENTRADA_VEHICULAR: { numero: 2, nombre: 'Entrada vehicular', medio: 'VEHICULAR' },
-  SALIDA_VEHICULAR: { numero: 3, nombre: 'Salida vehicular', medio: 'VEHICULAR' }
-};
-
-// Solo dígitos: evita que un QR ajeno (texto o URL) coincida con la matrícula 0
-const MATRICULA_VALIDA = /^\d{1,9}$/;
-// Pase de visitante: el código de barras contiene "V-" + folio; en "Acceder" se teclea solo el folio
-const CODIGO_VISITANTE = /^V-([A-Z0-9]{6,10})$/;
-const FOLIO_VISITANTE = /^[A-Z0-9]{6,10}$/;
-
 let pool;
-const ultimasLecturas = new Map(); // "LECTOR:matricula" -> ms de la última lectura
-
-function nombreCompleto(u) {
-  return [u.nombre, u.apellido_paterno, u.apellido_materno].filter(Boolean).join(' ');
-}
-
-function inicioDeHoy() {
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  return hoy;
-}
+const antirrebote = new Antirrebote({ ventanaSegundos: config.lectores.antirreboteSegundos });
 
 // Doble lectura: la persona ya registró un movimiento hace menos de LECTOR_INTERVALO_MIN_SEG segundos
 // (en cualquier lector). No se registra nada; se avisa al vigilante para que no lo tome como falla.
@@ -48,12 +38,7 @@ async function lecturaRepetida(conexion, columna, id) {
       ORDER BY fecha_entrada DESC, id_registro DESC LIMIT 1`,
     [id]
   );
-  if (!ultimo || ultimo.segundos >= config.lectores.intervaloMinimoSegundos) return null;
-  return `Ya registró su ${ultimo.fue_salida ? 'salida' : 'entrada'} hace ${Math.max(0, ultimo.segundos)} s; lectura ignorada`;
-}
-
-function formatoHora(fecha) {
-  return new Date(fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+  return mensajeLecturaRepetida(ultimo, config.lectores.intervaloMinimoSegundos);
 }
 
 function publicar(resultado) {
@@ -61,15 +46,7 @@ function publicar(resultado) {
 }
 
 function esRepetida(lector, matricula) {
-  const clave = `${lector}:${matricula}`;
-  const ahora = Date.now();
-  const ventana = config.lectores.antirreboteSegundos * 1000;
-  const anterior = ultimasLecturas.get(clave);
-  ultimasLecturas.set(clave, ahora);
-  if (ultimasLecturas.size > 500) {
-    for (const [k, t] of ultimasLecturas) if (ahora - t > ventana) ultimasLecturas.delete(k);
-  }
-  return anterior !== undefined && ahora - anterior < ventana;
+  return antirrebote.repetida(`${lector}:${matricula}`);
 }
 
 async function rechazar(base, texto, tipoError, mensaje) {
@@ -159,23 +136,17 @@ async function registrarEnBD(base, matricula, info) {
       [matricula]
     );
 
-    const cerrarAbierto = async (motivo) => {
-      await conexion.query('UPDATE registroacceso SET cierre_automatico = NOW() WHERE id_registro = ?', [abierto.id_registro]);
-      avisos.push(motivo);
-      abierto = null;
-    };
-
     // Entrada de un día anterior que el cierre diario no alcanzó a cerrar
-    if (abierto && new Date(abierto.fecha_entrada) < inicioDeHoy()) {
-      await cerrarAbierto(`Tenía una entrada del ${formatoHora(abierto.fecha_entrada)} sin salida; se cerró automáticamente`);
+    const decision = decidirMovimiento({ entradaAbierta: abierto, ahora: new Date(), inicioDelDia: inicioDeHoy() });
+    if (decision.cerrarAnterior) {
+      await conexion.query('UPDATE registroacceso SET cierre_automatico = NOW() WHERE id_registro = ?', [abierto.id_registro]);
+      avisos.push(decision.aviso);
+      abierto = null;
     }
 
     // El mismo criterio en los tres lectores: con entrada abierta sale, sin ella entra
-    const tipo = abierto ? 'SALIDA' : 'ENTRADA';
-
-    if (info.medio === 'VEHICULAR' && placas.length === 0) {
-      avisos.push(`${tipo === 'ENTRADA' ? 'Entró' : 'Salió'} en vehículo sin vehículo registrado`);
-    }
+    const tipo = decision.tipo;
+    avisos.push(...avisosDeAcceso({ tipo, medio: info.medio, placas }));
 
     if (tipo === 'ENTRADA') {
       await conexion.query(
@@ -253,7 +224,8 @@ async function registrarVisitanteEnBD(base, folio) {
       [visitante.id_visitante]
     );
     // Una entrada de otro día sin salida no convierte la visita de hoy en salida
-    if (abierto && new Date(abierto.fecha_entrada) < inicioDeHoy()) {
+    const decision = decidirMovimiento({ entradaAbierta: abierto, ahora: new Date(), inicioDelDia: inicioDeHoy() });
+    if (decision.cerrarAnterior) {
       await conexion.query('UPDATE registroacceso SET cierre_automatico = NOW() WHERE id_registro = ?', [abierto.id_registro]);
       abierto = null;
     }
@@ -265,7 +237,7 @@ async function registrarVisitanteEnBD(base, folio) {
     }
     await conexion.commit();
 
-    const estado = abierto ? 'SALIDA' : 'ENTRADA';
+    const estado = decision.tipo;
     return {
       ...base,
       ...datos,

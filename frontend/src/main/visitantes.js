@@ -2,58 +2,11 @@
 //
 // El folio es la credencial: se teclea en "Acceder" o se lee del código de barras del pase,
 // que se envía por correo cuando el visitante da uno. Sin correo, el folio se muestra en pantalla.
-const crypto = require('crypto');
 const { ipcMain } = require('electron');
+const { normalizar, validar, calcularVigencia, generarFolio } = require('@ssa/shared');
 const { enviarPaseVisitante } = require('./sendemails');
 
-const TIPOS = ['Ocasional', 'Frecuente'];
-const MESES_VIGENCIA_FRECUENTE = 6;
-// Sin 0/O ni 1/I para que el folio se pueda teclear sin confusiones (32 símbolos: reparto uniforme)
-const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const LONGITUD_FOLIO = 8;
-const SOLO_LETRAS = /^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]{2,50}$/;
-const CORREO_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 let pool;
-
-function generarFolio() {
-  return Array.from(crypto.randomBytes(LONGITUD_FOLIO), (b) => ALFABETO[b % ALFABETO.length]).join('');
-}
-
-function calcularVigencia(tipo) {
-  const fecha = new Date();
-  if (tipo === 'Frecuente') {
-    fecha.setMonth(fecha.getMonth() + MESES_VIGENCIA_FRECUENTE);
-  } else {
-    fecha.setHours(23, 59, 59, 0); // el ocasional solo entra el día que se registra
-  }
-  return fecha;
-}
-
-function normalizar(datos = {}) {
-  const limpio = (v) => String(v || '').trim();
-  return {
-    tipo: limpio(datos.tipo),
-    motivo: limpio(datos.motivo),
-    nombre: limpio(datos.nombre),
-    apellidoP: limpio(datos.apellidoP),
-    apellidoM: limpio(datos.apellidoM),
-    correo: limpio(datos.correo).toLowerCase(),
-    telefono: limpio(datos.telefono)
-  };
-}
-
-function validar(d) {
-  const errores = [];
-  if (!TIPOS.includes(d.tipo)) errores.push('Tipo de visitante inválido');
-  if (d.motivo.length < 3) errores.push('Motivo de al menos 3 caracteres');
-  if (!SOLO_LETRAS.test(d.nombre)) errores.push('Nombre inválido');
-  if (!SOLO_LETRAS.test(d.apellidoP)) errores.push('Apellido paterno inválido');
-  if (!SOLO_LETRAS.test(d.apellidoM)) errores.push('Apellido materno inválido');
-  if (d.correo && !CORREO_VALIDO.test(d.correo)) errores.push('Correo electrónico inválido');
-  if (!/^\d{10,15}$/.test(d.telefono)) errores.push('Teléfono debe tener 10–15 dígitos');
-  return errores;
-}
 
 async function insertarConFolioUnico(d, vigenteHasta) {
   for (let intento = 0; intento < 5; intento++) {

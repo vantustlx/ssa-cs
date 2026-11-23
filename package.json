@@ -1,29 +1,19 @@
 {
-  "name": "accesssystem",
+  "name": "ssa-cs",
   "version": "1.0.0",
-  "main": "src/main/main.js",
-  "scripts": {
-    "start": "electron src/main/main.js",
-    "dev": "electron src/main/main.js --dev"
-  },
-  "keywords": [],
-  "author": "",
   "private": true,
-  "license": "UNLICENSED",
-  "description": "Sistema de control de acceso de la FCBIyT (UATx): usuarios con QR, visitantes, lectores y reportes",
-  "devDependencies": {
-    "electron": "^44.5.1"
+  "packageManager": "pnpm@11.27.0",
+  "description": "Sistema de control de acceso de la FCBIyT (UATx): monorepo frontend (Electron) + backend (Express) + shared",
+  "engines": {
+    "node": ">=20"
   },
-  "dependencies": {
-    "@fontsource/ubuntu": "^5.3.0",
-    "@fortawesome/fontawesome-free": "^6.7.2",
-    "bwip-js": "^4.11.4",
-    "html5-qrcode": "^2.3.8",
-    "mysql2": "^3.24.5",
-    "nodemailer": "^10.0.15",
-    "pdfkit": "^0.17.2",
-    "qrcode": "^1.5.4",
-    "serialport": "^13.0.0",
-    "xlsx": "^0.18.5"
+  "scripts": {
+    "start": "pnpm --filter @ssa/frontend start",
+    "dev": "pnpm --filter @ssa/frontend dev",
+    "dev:back": "pnpm --filter @ssa/backend dev",
+    "start:back": "pnpm --filter @ssa/backend start",
+    "test": "pnpm --filter @ssa/shared test && pnpm --filter @ssa/backend test",
+    "db:up": "docker compose up -d mysql",
+    "db:down": "docker compose down"
   }
 }

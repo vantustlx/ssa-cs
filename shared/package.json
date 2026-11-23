@@ -1,0 +1,17 @@
+{
+  "name": "@ssa/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dominio compartido del Sistema de Acceso FCBIyT (sin Electron ni MySQL)",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./*": "./src/*.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

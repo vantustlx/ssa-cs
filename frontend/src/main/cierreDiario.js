@@ -12,6 +12,7 @@ const { crearNotificacion } = require('./notificaciones');
 const { respaldoDiario } = require('./respaldos');
 const { generarPdfCierre } = require('./utils/pdfCierreDiario');
 const { obtenerAreasDeUsuarios, areaPrincipal } = require('./areas');
+const { inicioDeHoy } = require('@ssa/shared');
 
 const INTERVALO_REVISION_MS = 60 * 1000;
 
@@ -23,12 +24,6 @@ function horaDeCierreHoy(ahora) {
   const hora = new Date(ahora);
   hora.setHours(Number.isFinite(h) ? h : 20, Number.isFinite(m) ? m : 0, 0, 0);
   return hora;
-}
-
-function inicioDeHoy() {
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  return hoy;
 }
 
 // Carpeta visible para auditorías (CIERRE_CARPETA en .env o Documentos)

@@ -137,3 +137,5 @@ dist
 
 opencode.jsonc
 AGENTS.md
+
+.codegraph/

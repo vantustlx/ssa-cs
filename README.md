@@ -1,11 +1,22 @@
 # AccessSystem
 
-Aplicación de escritorio (Electron + MySQL) para controlar el acceso a la facultad mediante código QR, con tres escáneres (peatonal, entrada vehicular y salida vehicular).
+Sistema de control de acceso de la FCBIyT (UATx): aplicación de escritorio (Electron) con tres escáneres (peatonal, entrada vehicular y salida vehicular).
+
+El repositorio es un **monorepo pnpm**:
+
+- `frontend/` — aplicación Electron (cliente de escritorio).
+- `backend/` — API Express (servidor).
+- `shared/` — reglas de dominio compartidas (sin Electron ni MySQL).
+- `db/` — esquema y migraciones de MySQL.
+- `worker/` — buzón de confirmaciones en Cloudflare.
+
+> Estado: la Fase 0–1 deja el frontend funcionando como antes (MySQL directo) y el backend solo con `GET /salud`. La migración completa a cliente-servidor está descrita en `PLAN_CLIENTE_SERVIDOR.md`.
 
 ## Requisitos
 
 - Node.js 20 o superior
-- MySQL 8.0
+- pnpm 9 o superior (`corepack enable` si no está instalado)
+- MySQL 8.0 (o Docker para desarrollo)
 - Conexión a internet (envío de correos y confirmación de registros)
 - Escáneres QR configurados como puerto serie (aparecen como `COMx` en el Administrador de dispositivos)
 
@@ -15,12 +26,15 @@ Aplicación de escritorio (Electron + MySQL) para controlar el acceso a la facul
 git clone https://github.com/vantustlx/security-scanner-app.git
 cd security-scanner-app
 git switch <tu-rama>        # main, integration, bryan-dev, carlos-dev, juary-dev o tonoh-dev
-npm install
+pnpm install
 ```
 
 ## Configuración
 
-Copia `.env.example` como `.env` y completa los valores. Las credenciales solo viven en `.env`, que no se sube a git; pide al administrador del proyecto las de Gmail y el buzón de confirmaciones.
+- **Frontend:** copia `frontend/.env.example` como `frontend/.env` y completa los valores.
+- **Backend:** copia `backend/.env.example` como `backend/.env` y completa los valores.
+
+Las credenciales solo viven en los `.env`, que no se suben a git; pide al administrador del proyecto las de Gmail y el buzón de confirmaciones. Durante la transición, `frontend/.env` conserva la configuración actual (BD, admin, Gmail, QR y puertos COM).
 
 | Variable | Descripción |
 |---|---|
@@ -39,7 +53,15 @@ Copia `.env.example` como `.env` y completa los valores. Las credenciales solo v
 
 ## Base de datos
 
-Crear la base de datos `sistemaaccesofacultad` con sus tablas y los catálogos de carreras, áreas y turnos:
+Con Docker (recomendado para desarrollo), levanta MySQL 8 en `127.0.0.1:3307` y carga el esquema automáticamente:
+
+```bash
+pnpm db:up
+```
+
+El usuario de desarrollo es `root` y la contraseña `ssa_dev_root` (definidos en `docker-compose.yml`); ajústalos en `frontend/.env` y `backend/.env`.
+
+Para usar un MySQL propio, crea la base de datos `sistemaaccesofacultad` con sus tablas y los catálogos de carreras, áreas y turnos:
 
 ```bash
 mysql -u root -p < db/schema.sql
@@ -142,17 +164,21 @@ Para probar sin publicar, crea `worker/.dev.vars` con `API_KEY=<clave>`, ejecuta
 ## Ejecutar
 
 ```bash
-npm start
+pnpm start          # aplicación Electron (frontend)
+pnpm dev            # Electron con herramientas de desarrollo
+pnpm dev:back       # API Express en http://localhost:3000
 ```
+
+Comprueba el backend con `curl http://localhost:3000/salud`.
 
 Si la aplicación se cierra al instante sin mostrar errores, reinstala Electron:
 
 ```bash
-rm -rf node_modules/electron node_modules/.package-lock.json
-npm install
+rm -rf node_modules/electron
+pnpm install
 ```
 
-`npm run dev` abre la app con las herramientas de desarrollo habilitadas. Con `npm start` están bloqueadas (también Ctrl+R y F5), igual que la navegación a páginas externas.
+Con `pnpm dev` están habilitadas las herramientas de desarrollo. Con `pnpm start` están bloqueadas (también Ctrl+R y F5), igual que la navegación a páginas externas.
 
 ## Seguridad
 
@@ -162,10 +188,12 @@ npm install
 
 ## Puesta en producción
 
+> La puesta en producción cambia cuando el backend y el cliente-servidor estén completos (Fases 2–5). Mientras tanto, la app sigue siendo Electron + MySQL directo.
+
 1. **MySQL 8** instalado como servicio con inicio **Automático** (`services.msc` → `MySQL80`) y una contraseña fuerte para `root`.
 2. **BD limpia:** `mysql -u root -p < db/schema.sql`. No copies la BD de desarrollo: tiene usuarios y accesos de prueba.
-3. **Usuario de la app:** edita la contraseña en `db/usuario_app.sql`, ejecútalo con root y usa `DB_USER=acceso_app` en `.env`.
-4. **`.env`:** completa todas las variables. Agrega `INICIAR_CON_WINDOWS=si` y apunta `RESPALDO_CARPETA` a una carpeta sincronizada (OneDrive o Google Drive). Guarda una copia del `.env` fuera de la PC: contiene `QR_SECRETO`.
-5. **App:** `npm ci` y `npm start`. En la ventana del lector usa **Configurar lectores** para asignar los tres escáneres.
+3. **Usuario de la app:** edita la contraseña en `db/usuario_app.sql`, ejecútalo con root y usa `DB_USER=acceso_app` en `frontend/.env`.
+4. **`.env`:** completa `frontend/.env`. Agrega `INICIAR_CON_WINDOWS=si` y apunta `RESPALDO_CARPETA` a una carpeta sincronizada (OneDrive o Google Drive). Guarda una copia del `.env` fuera de la PC: contiene `QR_SECRETO`.
+5. **App:** `pnpm install --frozen-lockfile` y `pnpm start`. En la ventana del lector usa **Configurar lectores** para asignar los tres escáneres.
 6. **Windows:** usa una cuenta estándar (sin permisos de administrador) en la PC de la caseta y desactiva la suspensión automática.
 7. **Gmail:** usa una cuenta institucional con contraseña de aplicación. Gmail permite unos 500 correos al día.

@@ -1,4 +1,4 @@
-// migration/importarUsuarios.js
+// frontend/scripts/importarUsuarios.js
 const fs = require('fs');
 const path = require('path');
 const xlsx = require('xlsx');
@@ -8,7 +8,7 @@ const config = require('../src/main/config');
 async function main() {
     const filePath = process.argv[2];
     if (!filePath) {
-        console.error('Uso: node migration/importarUsuarios.js <ruta-archivo.xlsx>');
+        console.error('Uso: node scripts/importarUsuarios.js <ruta-archivo.xlsx>');
         process.exit(1);
     }
 

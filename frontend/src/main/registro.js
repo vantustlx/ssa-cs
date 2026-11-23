@@ -12,16 +12,13 @@ const { enviarCorreoTerminos, enviarCredencial } = require('./sendemails');
 const { crearNotificacion } = require('./notificaciones');
 const { obtenerCatalogos, validarAreas, guardarAreas } = require('./areas');
 const { validarDatosPersonales } = require('./validacion');
+const { nombreCompleto } = require('@ssa/shared');
 
 // Margen para no vencer una solicitud cuya respuesta aún no se replica en el buzón
 const MINUTOS_GRACIA = 10;
 
 let pool;
 let sincronizando = false;
-
-function nombreCompleto(r) {
-  return [r.nombre, r.apellido_paterno, r.apellido_materno].filter(Boolean).join(' ');
-}
 
 async function llamarBuzon(ruta, { method = 'GET', body } = {}) {
   const { url, apiKey } = config.confirmacion;
